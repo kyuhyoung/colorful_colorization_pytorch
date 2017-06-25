@@ -12,7 +12,17 @@ from os.path import join, exists, abspath, basename
 from os import makedirs, listdir, getcwd, chdir
 from PIL import Image
 from time import time
+import sys, os, cv2
 
+
+
+import torch.optim as optim
+import torch.utils.data as utils_data
+
+import matplotlib.pyplot as plt
+import numpy as np
+from lr_scheduler import ReduceLROnPlateau
+from torch.autograd import Variable
 
 
 class Net(nn.Module):
@@ -43,62 +53,58 @@ class Net(nn.Module):
             num_features *= s
         return num_features
 
-class Cifar10CustomFile(utils_data.Dataset):
-    def __init__(self, dataset_path, data_size, data_transform, li_label, ext_img):
+class ImageNetCustomFile(utils_data.Dataset):
+    #def __init__(self, dataset_path, data_size, data_transform, li_label, ext_img):
+    def __init__(self, dataset_path, size, ext_img):
         self.dataset_path = dataset_path
-        self.num_samples = data_size
-        self.transform = data_transform
-        self.li_fn_img_classid = []
-        for idx, label in enumerate(li_label):
-            dir_label = join(dataset_path, label)
-            self.li_fn_img_classid += [(join(dir_label, fn_img), idx) for fn_img in listdir(dir_label)
-                                       if fn_img.endswith(ext_img)]
+        self.size_img = (size, size)
+        #self.num_samples = data_size
+        #self.transform = data_transform
+        self.li_fn_img = []
+        for dirpath, dirnames, filenames in os.walk(dataset_path):
+            self.li_fn_img += \
+                [join(dirpath, f) for f in filenames
+                 if f.lower().endswith(ext_img.lower())]
         return
 
     def __getitem__(self, index):
 
-        fn_img, target = self.li_fn_img_classid[index]
+        fn_img = self.li_fn_img[index]
         # doing this so that it is consistent with all other datasets
         # to return a PIL Image
         #img = Image.fromarray(img)
-        img = Image.open(fn_img).convert('RGB')
-        if self.transform is not None:
-            img = self.transform(img)
-        return img, target
+        #im_rgb = Image.open(fn_img).convert('RGB')
+        im_bgr = cv2.imread(fn_img)
+        im_bgr = cv2.resize(im_bgr, self.size_img, interpolation=cv2.INTER_AREA)
+        #if self.transform is not None:
+            #img = self.transform(img)
+        im_lab = cv2.cvtColor(im_bgr, cv2.COLOR_BGR2LAB)
+        return im_lab[:, :, 0], im_lab[:, :, 1:]
 
     def __len__(self):
-        return len(self.li_fn_img_classid)
+        return len(self.li_fn_img)
 
 
-def check_if_uncompression_done(dir_save):
+def check_if_uncompression_done(dir_save, foldername_train, foldername_test):
 
-    base_folder = 'imagenet'
-
-    train_list = [
-        ['data_batch_1', 'c99cafc152244af753f735de768cd75f'],
-        ['data_batch_2', 'd4bba439e000b95fd0a9bffe97cbabec'],
-        ['data_batch_3', '54ebc095f3ab1f0389bbae665268c751'],
-        ['data_batch_4', '634d18415352ddfa80567beed471001a'],
-        ['data_batch_5', '482c414d41f54cd18b22e5b47cb7c3cb'],
-    ]
-
-    test_list = [
-        ['test_batch', '40351d587109b95175f43aff81a1287e'],
-    ]
-
-    root = dir_save
-    for fentry in (train_list + test_list):
-        filename, md5 = fentry[0], fentry[1]
-        fpath = join(root, base_folder, filename)
-        if not check_integrity(fpath, md5):
-            return False
+    #base_folder = 'imagenet'
+    #fpath = join(dir_save, base_folder)
+    if not exists(dir_save):
+        return False
+    fpath_train = join(dir_save, foldername_train)
+    if not exists(fpath_train):
+        return False
+    fpath_test = join(dir_save, foldername_test)
+    if not exists(fpath_test):
+        return False
     return True
 
 
-def check_if_download_done(dir_save):
 
-    if not check_if_uncompression_done(dir_save):
-        filename = "cifar-10-python.tar.gz"
+def check_if_download_done(dir_save, foldername_train, foldername_test):
+
+    if not check_if_uncompression_done(dir_save, foldername_train, foldername_test):
+        filename = "imagenet.tar.gz"
         fn = join(dir_save, filename)
         return exists(fn)
     return True
@@ -174,64 +180,47 @@ def saveTestImages(dir_save, li_label, n_im_per_batch, foldername, ext_img):
 
 
 
-def prepare_imagenet_dataset(dir_save, ext_img):
+def prepare_imagenet_dataset(dir_save, foldername_train,
+                             foldername_test):
 
     #dir_save = './data'
     #n_im_per_label_train, n_im_per_label_test = 5000, 1000
-    foldername_train, foldername_test = 'train', 'test'
-    if not check_if_download_done(dir_save):
-        import tarfile
-        url = 'http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz'
-        filename = "cifar-10-python.tar.gz"
-        tgz_md5 = 'c58f30108f718f92721af3b95e74349a'
-        root = dir_save
-        download_url(url, root, filename, tgz_md5)
-    if not check_if_uncompression_done(dir_save):
-        # extract file
-        cwd = getcwd()
-        tar = tarfile.open(join(root, filename), "r:gz")
-        chdir(root)
-        tar.extractall()
-        tar.close()
-        chdir(cwd)
-        #loadData(url, dir_save)
-
-    li_label, byte_per_image, n_im_per_batch = get_label_names(dir_save)
-    dir_train, dir_test = join(dir_save, foldername_train), join(dir_save, foldername_test)
-    if check_if_image_set_exists(
-            dir_train, li_label, n_im_per_label_train, ext_img):
-        print(dir_train + ' are already existing.')
-    else:
-        saveTrainImages(dir_save, li_label, n_im_per_batch, foldername_train, ext_img)
-    if check_if_image_set_exists(
-            dir_test, li_label, n_im_per_label_test, ext_img):
-        print(dir_test + ' are already existing.')
-    else:
-        saveTestImages(dir_save, li_label, n_im_per_batch, foldername_test, ext_img)
-    return li_label
+    #foldername_train, foldername_test = 'train', 'test'
+    if not check_if_download_done(dir_save, foldername_train, foldername_test):
+        print('The imagenet file has not been downloaded yet')
+        sys.exit(1)
+    if not check_if_uncompression_done(dir_save, foldername_train, foldername_test):
+        print('The imagenet file has not been uncompressed yet')
+        sys.exit(1)
 
 
-def make_dataloader_custom_file(dir_data, data_transforms, ext_img,
+#def make_dataloader_custom_file(dir_data, data_transforms, ext_img,                                n_img_per_batch, n_worker):
+def make_dataloader_custom_file(dir_data, size_img, ext_img,
                                 n_img_per_batch, n_worker):
 
-    li_class = prepare_imagenet_dataset(dir_data, ext_img)
-    li_set = ['train', 'test']
-    data_size = {'train' : 50000, 'test' : 10000}
+    foldername_train, foldername_test = 'train', 'test'
+    prepare_imagenet_dataset(dir_data, foldername_train,
+                                 foldername_test)
+    li_set = [foldername_train, foldername_test]
+    #data_size = {'train' : 50000, 'test' : 10000}
     dsets = {x: ImageNetCustomFile(
-        join(dir_data, x), data_size[x], data_transforms[x], li_class, ext_img)
+        #join(dir_data, x), data_size[x], data_transforms[x], li_class, ext_img)
+        join(dir_data, x), size_img, ext_img)
              for x in li_set}
     dset_loaders = {x: utils_data.DataLoader(
         dsets[x], batch_size=n_img_per_batch, shuffle=True, num_workers=n_worker) for x in li_set}
     trainloader, testloader = dset_loaders[li_set[0]], dset_loaders[li_set[1]]
 
-    return trainloader, testloader, li_class
+    return trainloader, testloader#, li_class
 
 
-def initialize(is_gpu, dir_data, di_set_transform, ext_img,
-               n_img_per_batch, n_worker):
+def initialize(is_gpu, dir_data, size_img, #di_set_transform,
+               ext_img, n_img_per_batch, n_worker):
 
-    trainloader, testloader, li_class = make_dataloader_custom_file(
-        dir_data, di_set_transform, ext_img, n_img_per_batch, n_worker)
+    trainloader, testloader =\
+        make_dataloader_custom_file(
+            dir_data, size_img, #di_set_transform,
+            ext_img, n_img_per_batch, n_worker)
 
     #net = Net().cuda()
     net = Net()
@@ -243,7 +232,7 @@ def initialize(is_gpu, dir_data, di_set_transform, ext_img,
     optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
     scheduler = ReduceLROnPlateau(optimizer, 'min', verbose=1, patience = 8, epsilon=0.00001, min_lr=0.000001) # set up scheduler
 
-    return trainloader, testloader, net, criterion, optimizer, scheduler, li_class
+    return trainloader, testloader, net, criterion, optimizer, scheduler#, li_class
 
 
 
@@ -288,7 +277,7 @@ def validate_epoch(net, n_loss_rising, loss_avg_pre, ax,
 def train_epoch(
         net, trainloader, optimizer, criterion, scheduler, n_img_total,
         n_img_interval, n_img_milestone, running_loss, is_lr_just_decayed,
-        li_n_img, li_loss_avg_train, ax_loss_train, sec, epoch,
+        li_n_img, li_loss_avg_train, ax_loss, sec, epoch,
         kolor, interval_train_loss, is_gpu):
     shall_stop = False
     net.train()
@@ -324,7 +313,7 @@ def train_epoch(
             running_loss_avg = running_loss / n_img_interval
             li_n_img.append(n_img_total)
             li_loss_avg_train.append(running_loss_avg)
-            ax_loss_train.plot(li_n_img, li_loss_avg_train, c=kolor)
+            ax_loss.plot(li_n_img, li_loss_avg_train, c=kolor)
             plt.pause(sec)
             #i_batch += 1
             print('[%d, %5d] avg. loss per image : %.5f' %
@@ -397,12 +386,12 @@ def train(is_gpu, trainloader, testloader, net, criterion, optimizer, scheduler,
         is_lr_just_decayed, n_batch = train_epoch(
             net, trainloader, optimizer, criterion, scheduler, n_image_total,
             n_img_interval, n_img_milestone, running_loss, is_lr_just_decayed,
-            li_n_img_train, li_loss_avg_train, ax_loss_train, sec, epoch,
+            li_n_img_train, li_loss_avg_train, ax_loss, sec, epoch,
             di_ax_color['train'], interval_train_loss, is_gpu)
         shall_stop_val, net, n_loss_rising, loss_avg_pre, ax_loss_val, \
         li_n_img_val, li_loss_avg_val, lap_val, n_img_val = \
             validate_epoch(
-                net, n_loss_rising, loss_avg_pre, ax_loss_val,
+                net, n_loss_rising, loss_avg_pre, ax_loss,
                 li_n_img_val, li_loss_avg_val,
                 testloader, criterion, th_n_loss_rising, di_ax_color['val'],
                 n_image_total, sec,         is_gpu)
@@ -433,27 +422,27 @@ def main():
 
     is_gpu = torch.cuda.device_count() > 0
     #dir_data = './data'
-    dir_data = '/mnt/data/data'
-    ext_img = 'png'
+    dir_data = '/mnt/data/data/imagenet'
+    ext_img = 'jpeg'
     #n_epoch = 100
     n_epoch = 50
     #n_img_per_batch = 40
     n_img_per_batch = 60
     n_worker = 4
+    size_img = 256
     interval_train_loss = int(round(20000 / n_img_per_batch)) * n_img_per_batch
 
-
+    '''
     transform = transforms.Compose(
         [transforms.ToTensor(),
          transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-
     di_set_transform = {'train' : transform, 'test' : transform}
-
+    '''
     start = time()
-    trainloader, testloader, net, criterion, optimizer, scheduler, li_class = \
+    trainloader, testloader, net, criterion, optimizer, scheduler =\
         initialize(
-            is_gpu, dir_data, di_set_transform, ext_img,
-            n_img_per_batch, n_worker)
+            is_gpu, dir_data, size_img, #di_set_transform,
+            ext_img, n_img_per_batch, n_worker)
     lap_init = time() - start
     train(is_gpu, trainloader, testloader, net, criterion, optimizer, scheduler,  # li_class,
           n_epoch, lap_init, n_img_per_batch, interval_train_loss)
