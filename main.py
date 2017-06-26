@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.data as utils_data
 import torchvision.transforms as transforms
 import numpy as np
@@ -25,9 +26,11 @@ from lr_scheduler import ReduceLROnPlateau
 from torch.autograd import Variable
 
 
+
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
+        self.nb_class
         self.conv1 = nn.Conv2d(1, 64, 5)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 16, 5)
@@ -36,6 +39,64 @@ class Net(nn.Module):
         self.fc3 = nn.Linear(84, 10)
 
     def forward(self, x):
+
+        list_input_size = [1, 64, 128, 256, 512]
+        list_output_size = [64, 128, 256, 512, 512]
+        list_block_size = [2, 2, 3, 3, 3]
+        subsample = [(2, 2), (2, 2), (2, 2), (1, 1), (1, 1)]
+
+        # A trous blocks parameters
+        list_input_size_atrous = [512, 512]
+        list_output_size_atrous = [512, 512]
+        list_block_size_atrous = [3, 3]
+
+        #t1 = x.size()
+        current_h, current_w = x.size()[2], x.size()[3]
+        block_idx = 0
+
+        '''
+        # First block
+        f, b, s = list_filter_size[0], list_block_size[0], subsample[0]
+        t1 = x.size()
+        x = self.convolutional_block(x, block_idx, 1, f, b, s)
+        block_idx += 1
+        current_h, current_w = current_h / s[0], current_w / s[1]
+        '''
+        # Next blocks
+        #for f, b, s in zip(list_filter_size[1:-1], list_block_size[1:-1], subsample[1:-1]):
+        for i, f, b, s in zip(list_input_size[:-1], list_output_size[:-1], list_block_size[:-1], subsample[:-1]):
+            x = convolutional_block(x, block_idx, i, f, b, s)
+            block_idx += 1
+            current_h, current_w = current_h / s[0], current_w / s[1]
+
+        # Atrous blocks
+        for idx, (i, f, b) in enumerate(zip(list_input_size_atrous, list_output_size_atrous, list_block_size_atrous)):
+            x = atrous_block(x, block_idx, i, f, b)
+            block_idx += 1
+
+        # Block 7
+        i, f, b, s = list_input_size[-1], list_output_size[-1], list_block_size[-1], subsample[-1]
+        x = convolutional_block(x, block_idx, i, f, b, s)
+        block_idx += 1
+        current_h, current_w = current_h / s[0], current_w / s[1]
+
+        # Block 8
+        # Not using Deconvolution at the moment
+        # x = Deconvolution2D(256, 2, 2,
+        #                     output_shape=(None, 256, current_h * 2, current_w * 2),
+        #                     subsample=(2, 2),
+        #                     border_mode="valid")(x)
+        #x = UpSampling2D(size=(2, 2), name="upsampling2d")(x)
+        x = nn.Upsample(scale_factor=2, mode='bilinear')(x)
+
+        x = convolutional_block(x, block_idx, list_output_size[-1], 256, 2, (1, 1))
+        block_idx += 1
+        current_h, current_w = current_h * 2, current_w * 2
+
+        # Final conv
+        #x = Convolution2D(nb_classes, 1, 1, name="conv2d_final", border_mode="same")(x)
+        x = nn.Conv2d(256, nb_class, 1)(x)
+
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
         t1 = self.num_flat_features(x)
@@ -53,6 +114,7 @@ class Net(nn.Module):
             num_features *= s
         return num_features
 
+
 class ImageNetCustomFile(utils_data.Dataset):
     #def __init__(self, dataset_path, data_size, data_transform, li_label, ext_img):
     def __init__(self, dataset_path, size, ext_img):
@@ -62,9 +124,12 @@ class ImageNetCustomFile(utils_data.Dataset):
         #self.transform = data_transform
         self.li_fn_img = []
         for dirpath, dirnames, filenames in os.walk(dataset_path):
+            print('Reading image names under %s' % (dirpath))
             self.li_fn_img += \
                 [join(dirpath, f) for f in filenames
                  if f.lower().endswith(ext_img.lower())]
+            if self.__len__() > 100:
+                break
         return
 
     def __getitem__(self, index):
@@ -79,10 +144,84 @@ class ImageNetCustomFile(utils_data.Dataset):
         #if self.transform is not None:
             #img = self.transform(img)
         im_lab = cv2.cvtColor(im_bgr, cv2.COLOR_BGR2LAB)
-        return im_lab[:, :, 0], im_lab[:, :, 1:]
+        #t1, t2 = torch.from_numpy(im_lab[:, :, 0:1]), torch.from_numpy(im_lab[:, :, 1:])
+        #return torch.from_numpy(im_lab[:, :, 0:1]), torch.from_numpy(im_lab[:, :, 1:])
+        #return im_lab[:, :, 0:1].astype(np.float32), torch.from_numpy(im_lab[:, :, 1:].astype(np.float32))
+        #t1, t2 = ToTensor2(im_lab[:, :, 0:1]), ToTensor2(im_lab[:, :, 1:])
+        return ToTensor2(im_lab[:, :, 0:1]), ToTensor2(im_lab[:, :, 1:])
 
     def __len__(self):
         return len(self.li_fn_img)
+
+
+
+def convolutional_block(x, block_idx, n_input_channel, nb_filter,
+                        nb_conv, subsample):
+    # 1st conv
+    for i in range(nb_conv):
+        name = "block%s_conv2D_%s" % (block_idx, i)
+        if i < nb_conv - 1:
+            # x = Convolution2D(nb_filter, 3, 3, name=name, border_mode="same")(x)
+            x = nn.Conv2d(n_input_channel, nb_filter, 3)(x)
+        else:
+            # x = Convolution2D(nb_filter, 3, 3, name=name, subsample=subsample, border_mode="same")(x)
+            x = nn.Conv2d(n_input_channel, nb_filter, 3, stride=subsample)(x)
+        n_input_channel = nb_filter
+        # x = BatchNormalization(mode=2, axis=1)(x)
+        x = nn.BatchNorm2d(nb_filter)(x)
+        # x = Activation("relu")(x)
+        x = F.relu(x)
+    return x
+
+def atrous_block(x, block_idx, n_input_channel, nb_filter, nb_conv):
+
+    # 1st conv
+    for i in range(nb_conv):
+        name = "block%s_conv2D_%s" % (block_idx, i)
+        #x = AtrousConvolution2D(nb_filter, 3, 3, name=name, border_mode="same")(x)
+        #x = nn.Conv2d(n_input_channel, nb_filter, 3, dilation=?)(x)
+        x = nn.Conv2d(n_input_channel, nb_filter, 3)(x)
+
+        #x = BatchNormalization(mode=2, axis=1)(x)
+        x = nn.BatchNorm2d(nb_filter)(x)
+        #x = Activation("relu")(x)
+        x = F.relu(x)
+        n_input_channel = nb_filter
+    return x
+
+def ToTensor2(pic):
+    """Converts a PIL.Image or numpy.ndarray (H x W x C) in the range
+    to a torch.FloatTensor of shape (C x H x W)
+    """
+    if isinstance(pic, np.ndarray):
+        # handle numpy array
+        img = torch.from_numpy(pic.transpose((2, 0, 1)))
+        # backard compability
+        #return img.float().div(255)
+        return img.float()
+    # handle PIL Image
+    if pic.mode == 'I':
+        img = torch.from_numpy(np.array(pic, np.int32, copy=False))
+    elif pic.mode == 'I;16':
+        img = torch.from_numpy(np.array(pic, np.int16, copy=False))
+    else:
+        img = torch.ByteTensor(torch.ByteStorage.from_buffer(pic.tobytes()))
+    # PIL image mode: 1, L, P, I, F, RGB, YCbCr, RGBA, CMYK
+    if pic.mode == 'YCbCr':
+        nchannel = 3
+    elif pic.mode == 'I;16':
+        nchannel = 1
+    else:
+        nchannel = len(pic.mode)
+    img = img.view(pic.size[1], pic.size[0], nchannel)
+    # put it from HWC to CHW format
+    # yikes, this transpose takes 80% of the loading time/CPU
+    img = img.transpose(0, 1).transpose(0, 2).contiguous()
+    if isinstance(img, torch.ByteTensor):
+        #return img.float().div(255)
+        return img.float()
+    else:
+        return img
 
 
 def check_if_uncompression_done(dir_save, foldername_train, foldername_test):
@@ -198,7 +337,7 @@ def prepare_imagenet_dataset(dir_save, foldername_train,
 def make_dataloader_custom_file(dir_data, size_img, ext_img,
                                 n_img_per_batch, n_worker):
 
-    foldername_train, foldername_test = 'train', 'test'
+    foldername_train, foldername_test = 'train', 'val'
     prepare_imagenet_dataset(dir_data, foldername_train,
                                  foldername_test)
     li_set = [foldername_train, foldername_test]
@@ -420,14 +559,16 @@ def train(is_gpu, trainloader, testloader, net, criterion, optimizer, scheduler,
 
 def main():
 
-    is_gpu = torch.cuda.device_count() > 0
+    is_gpu = False
+    #is_gpu = torch.cuda.device_count() > 0
     #dir_data = './data'
     dir_data = '/mnt/data/data/imagenet'
     ext_img = 'jpeg'
     #n_epoch = 100
     n_epoch = 50
     #n_img_per_batch = 40
-    n_img_per_batch = 60
+    #n_img_per_batch = 60
+    n_img_per_batch = 2
     n_worker = 4
     size_img = 256
     interval_train_loss = int(round(20000 / n_img_per_batch)) * n_img_per_batch
