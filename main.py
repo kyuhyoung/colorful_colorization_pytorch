@@ -28,9 +28,10 @@ from torch.autograd import Variable
 
 
 class Net(nn.Module):
-    def __init__(self):
+    def __init__(self, n_class, batch_size):
         super(Net, self).__init__()
-        self.nb_class
+        self.nb_class = n_class
+        self.batch_size = batch_size
         self.conv1 = nn.Conv2d(1, 64, 5)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 16, 5)
@@ -51,7 +52,8 @@ class Net(nn.Module):
         list_block_size_atrous = [3, 3]
 
         #t1 = x.size()
-        current_h, current_w = x.size()[2], x.size()[3]
+        h, w = x.size()[2], x.size()[3]
+        current_h, current_w = h, w
         block_idx = 0
 
         '''
@@ -87,7 +89,7 @@ class Net(nn.Module):
         #                     subsample=(2, 2),
         #                     border_mode="valid")(x)
         #x = UpSampling2D(size=(2, 2), name="upsampling2d")(x)
-        x = nn.Upsample(scale_factor=2, mode='bilinear')(x)
+        x = nn.UpsamplingBilinear2d(scale_factor=2)(x)
 
         x = convolutional_block(x, block_idx, list_output_size[-1], 256, 2, (1, 1))
         block_idx += 1
@@ -95,7 +97,27 @@ class Net(nn.Module):
 
         # Final conv
         #x = Convolution2D(nb_classes, 1, 1, name="conv2d_final", border_mode="same")(x)
-        x = nn.Conv2d(256, nb_class, 1)(x)
+        x = nn.Conv2d(256, self.nb_class, 1)(x)
+
+        # Reshape Softmax
+        def output_shape(self, input_shape):
+            return (self.batch_size, h, w, self.nb_class + 1)
+
+        def reshape_softmax(x):
+            x = K.permute_dimensions(x, [0, 2, 3, 1])  # last dimension in number of filters
+            x = K.reshape(x, (self.batch_size * current_h * current_w, nb_classes))
+            x = K.softmax(x)
+            # Add a zero column so that x has the same dimension as the target (313 classes + 1 weight)
+            xc = K.zeros((self.batch_size * current_h * current_w, 1))
+            x = K.concatenate([x, xc], axis=1)
+            # Reshape back to (batch_size, h, w, nb_classes + 1) to satisfy keras' shape checks
+            x = K.reshape(x, (self.batch_size, current_h, current_w, self.nb_class + 1))
+            x = K.resize_images(x, h / current_h, w / current_w, "tf")
+            # x = K.permute_dimensions(x, [0, 3, 1, 2])
+            return x
+
+        ReshapeSoftmax = Lambda(lambda z: reshape_softmax(z), output_shape=output_shape, name="ReshapeSoftmax")
+        x = ReshapeSoftmax(x)
 
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
@@ -354,7 +376,7 @@ def make_dataloader_custom_file(dir_data, size_img, ext_img,
 
 
 def initialize(is_gpu, dir_data, size_img, #di_set_transform,
-               ext_img, n_img_per_batch, n_worker):
+               ext_img, n_img_per_batch, n_worker, n_class):
 
     trainloader, testloader =\
         make_dataloader_custom_file(
@@ -362,7 +384,7 @@ def initialize(is_gpu, dir_data, size_img, #di_set_transform,
             ext_img, n_img_per_batch, n_worker)
 
     #net = Net().cuda()
-    net = Net()
+    net = Net(n_class, n_img_per_batch)
     #t1 = net.cuda()
     criterion = nn.CrossEntropyLoss()
     if is_gpu:
@@ -571,6 +593,7 @@ def main():
     n_img_per_batch = 2
     n_worker = 4
     size_img = 256
+    n_class = 300
     interval_train_loss = int(round(20000 / n_img_per_batch)) * n_img_per_batch
 
     '''
@@ -583,7 +606,7 @@ def main():
     trainloader, testloader, net, criterion, optimizer, scheduler =\
         initialize(
             is_gpu, dir_data, size_img, #di_set_transform,
-            ext_img, n_img_per_batch, n_worker)
+            ext_img, n_img_per_batch, n_worker, n_class)
     lap_init = time() - start
     train(is_gpu, trainloader, testloader, net, criterion, optimizer, scheduler,  # li_class,
           n_epoch, lap_init, n_img_per_batch, interval_train_loss)
