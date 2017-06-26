@@ -54,7 +54,7 @@ class Net(nn.Module):
         #t1 = x.size()
         h, w = x.size()[2], x.size()[3]
         current_h, current_w = h, w
-        block_idx = 0
+        block_idx = 1
 
         '''
         # First block
@@ -90,14 +90,36 @@ class Net(nn.Module):
         #                     border_mode="valid")(x)
         #x = UpSampling2D(size=(2, 2), name="upsampling2d")(x)
         x = nn.UpsamplingBilinear2d(scale_factor=2)(x)
+        current_h, current_w = current_h * 2, current_w * 2
 
         x = convolutional_block(x, block_idx, list_output_size[-1], 256, 2, (1, 1))
         block_idx += 1
-        current_h, current_w = current_h * 2, current_w * 2
+        #current_h, current_w = current_h * 2, current_w * 2
+        current_h, current_w = current_h / s[0], current_w / s[1]
 
         # Final conv
         #x = Convolution2D(nb_classes, 1, 1, name="conv2d_final", border_mode="same")(x)
         x = nn.Conv2d(256, self.nb_class, 1)(x)
+
+        #x = K.permute_dimensions(x, [0, 2, 3, 1])  # last dimension in number of filters
+        #x = x.permute(0, 2, 3, 1)
+
+        #x = K.reshape(x, (self.batch_size * current_h * current_w, nb_classes))
+        #x = x.contiguous().view(self.batch_size * current_h * current_w, self.nb_class)
+        x, input_size, trans_size, axis = softmax2D(x)
+        # Add a zero column so that x has the same dimension as the target (313 classes + 1 weight)
+        #xc = K.zeros((self.batch_size * current_h * current_w, 1))
+        xc = Variable(torch.zeros((self.batch_size * current_h * current_w, 1)))
+        #x = K.concatenate([x, xc], axis=1)
+        x = torch.cat([x, xc], 1)
+        # Reshape back to (batch_size, h, w, nb_classes + 1) to satisfy keras' shape checks
+        #x = K.reshape(x, (self.batch_size, current_h, current_w, self.nb_class + 1))
+        #x = x.view(*trans_size)
+        x = x.view(trans_size[0], trans_size[1], trans_size[2], trans_size[3] + 1)
+        x = x.transpose(axis, len(input_size) - 1)
+
+        ?
+        x = K.resize_images(x, h / current_h, w / current_w, "tf")
 
         # Reshape Softmax
         def output_shape(self, input_shape):
@@ -176,18 +198,39 @@ class ImageNetCustomFile(utils_data.Dataset):
         return len(self.li_fn_img)
 
 
+def softmaxND(input, axis=1):
+
+    input_size = input.size()
+    t1 = len(input_size) - 1
+    trans_input = input.transpose(axis, t1)
+    trans_size = trans_input.size()
+    input_2d = trans_input.contiguous().view(-1, trans_size[-1])
+    soft_max_2d = F.softmax(input_2d)
+    soft_max_nd = soft_max_2d.view(*trans_size)
+    return soft_max_nd.transpose(axis, len(input_size) - 1)
+
+def softmax2D(input, axis=1):
+    input_size = input.size()
+    t1 = len(input_size) - 1
+    trans_input = input.transpose(axis, t1)
+    trans_size = trans_input.size()
+    input_2d = trans_input.contiguous().view(-1, trans_size[-1])
+    soft_max_2d = F.softmax(input_2d)
+    return soft_max_2d, input_size, trans_size, axis
+
 
 def convolutional_block(x, block_idx, n_input_channel, nb_filter,
                         nb_conv, subsample):
     # 1st conv
     for i in range(nb_conv):
         name = "block%s_conv2D_%s" % (block_idx, i)
+        print(name)
         if i < nb_conv - 1:
             # x = Convolution2D(nb_filter, 3, 3, name=name, border_mode="same")(x)
-            x = nn.Conv2d(n_input_channel, nb_filter, 3)(x)
+            x = nn.Conv2d(n_input_channel, nb_filter, 3, padding=1)(x)
         else:
             # x = Convolution2D(nb_filter, 3, 3, name=name, subsample=subsample, border_mode="same")(x)
-            x = nn.Conv2d(n_input_channel, nb_filter, 3, stride=subsample)(x)
+            x = nn.Conv2d(n_input_channel, nb_filter, 3, padding=1, stride=subsample)(x)
         n_input_channel = nb_filter
         # x = BatchNormalization(mode=2, axis=1)(x)
         x = nn.BatchNorm2d(nb_filter)(x)
@@ -200,9 +243,10 @@ def atrous_block(x, block_idx, n_input_channel, nb_filter, nb_conv):
     # 1st conv
     for i in range(nb_conv):
         name = "block%s_conv2D_%s" % (block_idx, i)
+        print(name)
         #x = AtrousConvolution2D(nb_filter, 3, 3, name=name, border_mode="same")(x)
         #x = nn.Conv2d(n_input_channel, nb_filter, 3, dilation=?)(x)
-        x = nn.Conv2d(n_input_channel, nb_filter, 3)(x)
+        x = nn.Conv2d(n_input_channel, nb_filter, 3, padding=1)(x)
 
         #x = BatchNormalization(mode=2, axis=1)(x)
         x = nn.BatchNorm2d(nb_filter)(x)
