@@ -117,38 +117,8 @@ class Net(nn.Module):
         #x = x.view(*trans_size)
         x = x.view(trans_size[0], trans_size[1], trans_size[2], trans_size[3] + 1)
         x = x.transpose(axis, len(input_size) - 1)
-
-        ?
-        x = K.resize_images(x, h / current_h, w / current_w, "tf")
-
-        # Reshape Softmax
-        def output_shape(self, input_shape):
-            return (self.batch_size, h, w, self.nb_class + 1)
-
-        def reshape_softmax(x):
-            x = K.permute_dimensions(x, [0, 2, 3, 1])  # last dimension in number of filters
-            x = K.reshape(x, (self.batch_size * current_h * current_w, nb_classes))
-            x = K.softmax(x)
-            # Add a zero column so that x has the same dimension as the target (313 classes + 1 weight)
-            xc = K.zeros((self.batch_size * current_h * current_w, 1))
-            x = K.concatenate([x, xc], axis=1)
-            # Reshape back to (batch_size, h, w, nb_classes + 1) to satisfy keras' shape checks
-            x = K.reshape(x, (self.batch_size, current_h, current_w, self.nb_class + 1))
-            x = K.resize_images(x, h / current_h, w / current_w, "tf")
-            # x = K.permute_dimensions(x, [0, 3, 1, 2])
-            return x
-
-        ReshapeSoftmax = Lambda(lambda z: reshape_softmax(z), output_shape=output_shape, name="ReshapeSoftmax")
-        x = ReshapeSoftmax(x)
-
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        t1 = self.num_flat_features(x)
-        x = x.view(-1, self.num_flat_features(x))
-        #x = x.view(-1, 16 * 5 * 5)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
+        #x = K.resize_images(x, h / current_h, w / current_w, "tf")
+        x = nn.UpsamplingBilinear2d(size=(h, w))(x)
         return x
 
     def num_flat_features(self, x):
@@ -419,6 +389,29 @@ def make_dataloader_custom_file(dir_data, size_img, ext_img,
     return trainloader, testloader#, li_class
 
 
+def categorical_crossentropy_color(y_true, y_pred):
+
+    print(y_true.size())
+    print(y_pred.size())
+
+    # Flatten
+    n, h, w, q = y_true.shape
+    y_true = K.reshape(y_true, (n * h * w, q))
+    y_pred = K.reshape(y_pred, (n * h * w, q))
+
+    weights = y_true[:, 313:]  # extract weight from y_true
+    weights = K.concatenate([weights] * 313, axis=1)
+    y_true = y_true[:, :-1]  # remove last column
+    y_pred = y_pred[:, :-1]  # remove last column
+
+    # multiply y_true by weights
+    y_true = y_true * weights
+
+    cross_ent = K.categorical_crossentropy(y_pred, y_true)
+    cross_ent = K.mean(cross_ent, axis=-1)
+
+    return cross_ent
+
 def initialize(is_gpu, dir_data, size_img, #di_set_transform,
                ext_img, n_img_per_batch, n_worker, n_class):
 
@@ -500,7 +493,8 @@ def train_epoch(
         # forward + backward + optimize
         outputs = net(inputs)
         # labels += 10
-        loss = criterion(outputs, labels)
+        #loss = criterion(outputs, labels)
+        loss = categorical_crossentropy_color(outputs, labels)
         loss.backward()
         optimizer.step()
         # n_image_total += labels.size()[0]
