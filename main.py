@@ -29,11 +29,12 @@ from torch.autograd import Variable
 
 
 
-class Net(nn.Module):
+class Network(nn.Module):
     #def __init__(self, n_class, batch_size):
-    def __init__(self, batch_size):
-        super(Net, self).__init__()
+    def __init__(self, hw):
+        super(Network, self).__init__()
         #self.nb_class = n_class
+        '''
         self.batch_size = batch_size
         self.conv1 = nn.Conv2d(1, 64, 5)
         self.pool = nn.MaxPool2d(2, 2)
@@ -41,17 +42,137 @@ class Net(nn.Module):
         self.fc1 = nn.Linear(16 * 5 * 5, 120)
         self.fc2 = nn.Linear(120, 84)
         self.fc3 = nn.Linear(84, 10)
+        '''
+
+        list_input_size = [1, 64, 128, 256, 512]
+        list_output_size = [64, 128, 256, 512, 512]
+        list_block_size = [2, 2, 3, 3, 3]
+        subsample = [(2, 2), (2, 2), (2, 2), (1, 1), (1, 1)]
+
+        # A trous blocks parameters
+        list_input_size_atrous = [512, 512]
+        list_output_size_atrous = [512, 512]
+        list_block_size_atrous = [3, 3]
+
+        #t1 = x.size()
+        #h, w = x.size()[2], x.size()[3]
+        #h, w = hw
+        current_h, current_w = hw
+        self.hw = hw
+        block_idx = 1
+
+        # Next blocks
+        li_conv_block = []
+        for i, f, b, s in zip(list_input_size[:-1], list_output_size[:-1], list_block_size[:-1], subsample[:-1]):
+            #x = convolutional_block(x, block_idx, i, f, b, s, dev)
+            li_conv_block.append(Convolutional_Block(block_idx, i, f, b, s))
+            block_idx += 1
+            current_h, current_w = current_h / s[0], current_w / s[1]
+        self.conv_block_series = nn.Sequential(*li_conv_block)
+        li_atrous_block = []
+        # Atrous blocks
+        for idx, (i, f, b) in enumerate(zip(list_input_size_atrous, list_output_size_atrous, list_block_size_atrous)):
+            li_atrous_block.append(Atrous_Block(block_idx, i, f, b))
+            block_idx += 1
+
+        self.atrous_block_series = nn.Sequential(*li_atrous_block)
+
+        i, f, b, s = list_input_size[-1], list_output_size[-1], list_block_size[-1], subsample[-1]
+        self.conv_block_1 = Convolutional_Block(block_idx, i, f, b, s)
+        self.upsample_1 = nn.UpsamplingBilinear2d(scale_factor = 2)
+        block_idx += 1
+        current_h, current_w = current_h / s[0], current_w / s[1]
+        current_h, current_w = current_h * 2, current_w * 2
+        self.conv_block_2 = Convolutional_Block(block_idx, list_output_size[-1], 256, 2, (1, 1))
+        self.conv_block_3 = Convolutional_Block(block_idx, 256, 128, 2, (1, 1))
+        self.conv_block_4 = Convolutional_Block(block_idx, 128, 32, 2, (1, 1))
+        self.conv_block_5 = Convolutional_Block(block_idx, 32, 2, 2, (1, 1))
+        block_idx += 1
+        self.current_h, self.current_w = current_h / s[0], current_w / s[1]
+        #print('self.current_h :', self.current_h);  print('self.current_w :', self.current_w);  exit(0);
+        self.conv_1 = nn.Conv2d(256, 1, 1)
+        self.upsample_2 = nn.UpsamplingBilinear2d(size = self.hw)
+
+    #def to(self, *args, **kwargs):
+    #    self = super().to(*args, **kwargs) 
+    #    print('what the', self.li_conv_block)
+    #    print('t_0 :', self.li_conv_block[0]);#    exit(0);
+    #    t_1 = self.li_conv_block[0].to(*args, **kwargs)
+    #    print('t_1 :', t_1);    exit(0);
+    #    self.li_conv_block = [conv_block.to(*args, **kwargs) for conv_block in self.li_conv_block]
+    #    print('shut up', self.li_conv_block);   exit(0);
+    #    return self
+
 
     def forward(self, x):
+       
+        batch_size = x.shape[0]
+        print('x.shape ori :', x.shape);
+        x = self.conv_block_series(x)
+        print('x.shape 1 :', x.shape);
+        #for conv_block in self.li_conv_block:
+        #    x = conv_block(x)
+        x = self.atrous_block_series(x)
+        print('x.shape 2 :', x.shape);
+        #for atrous_block in li_atrous_block:
+        #    x = atrous_block(x)
+          
+        x = self.conv_block_1(x)
+        print('x.shape 3 :', x.shape);
+        #x = nn.UpsamplingBilinear2d(scale_factor = 2)(x)
+        x = self.upsample_1(x)
+        print('x.shape 4 :', x.shape);
+        x = self.conv_block_2(x)
+        print('x.shape 5 :', x.shape);
+        x = self.conv_block_3(x)
+        #x = self.conv_1(x)
+        print('x.shape 6 :', x.shape);
+        x = self.upsample_1(x)
+        print('x.shape 7 :', x.shape);
+        x = self.conv_block_4(x)
+        print('x.shape 8 :', x.shape);
+        x = self.upsample_2(x)
+        print('x.shape 9 :', x.shape);
+        x = self.conv_block_5(x)
+        print('x.shape 10 :', x.shape);
+        '''
+        x, input_size, trans_size, axis = softmax2D(x)
+        print('x.shape after :', x.shape);  #exit(0);
+        if torch.is_tensor(batch_size) and torch.is_tensor(self.current_h) and torch.is_tensor(self.current_w):
+            t_0 = int(batch_size.item() * self.current_h.item() * self.current_w.item())
+        else:
+            t_0 = int(batch_size * self.current_h * self.current_w)
+        t_1 = torch.zeros(t_0, 1).to(x.device)
+        xc = Variable(t_1)
+        x = torch.cat([x, xc], 1)
+        print('x.shape after :', x.shape);  #exit(0);
+        # Reshape back to (batch_size, h, w, nb_classes + 1) to satisfy keras' shape checks
+        #x = K.reshape(x, (self.batch_size, current_h, current_w, self.nb_class + 1))
+        #x = x.view(*trans_size)
+        x = x.view(trans_size[0], trans_size[1], trans_size[2], trans_size[3] + 1)
+        print('x.shape after :', x.shape);  #exit(0);
+        x = x.transpose(axis, len(input_size) - 1)
+        print('x.shape after :', x.shape);  exit(0);
+        #x = K.resize_images(x, h / current_h, w / current_w, "tf")
+        #print('type(self.current_h) :', type(self.current_h));  #exit(0);
+        #print('x.shape :', x.shape);  exit(0);
+        #x = nn.UpsamplingBilinear2d(size=(int(self.current_h), int(self.current_w)))(x)
+        #x = nn.UpsamplingBilinear2d(size = self.hw)(x)
+        x = self.upsample_2(x)
+        '''
+        return x
+
+             
+        '''
         #print('\ntype(x.shape) :', type(x.shape)) 
         #print('x.shape :', x.shape) 
-        batch_size = x.shape[0]
+        #batch_size = x.shape[0]
         #if torch.is_tensor(batch_size):
         #    batch_size = batch_size.item()
 
         #print('type(batch_size) :', type(batch_size))
         #print('batch_size :', batch_size)
-        dev = torch.device("cuda") if next(self.parameters()).is_cuda else torch.device("cpu") 
+        #dev = torch.device("cuda") if next(self.parameters()).is_cuda else torch.device("cpu") 
 
         list_input_size = [1, 64, 128, 256, 512]
         list_output_size = [64, 128, 256, 512, 512]
@@ -68,29 +189,24 @@ class Net(nn.Module):
         current_h, current_w = h, w
         block_idx = 1
 
-        '''
-        # First block
-        f, b, s = list_filter_size[0], list_block_size[0], subsample[0]
-        t1 = x.size()
-        x = self.convolutional_block(x, block_idx, 1, f, b, s)
-        block_idx += 1
-        current_h, current_w = current_h / s[0], current_w / s[1]
-        '''
         # Next blocks
         #for f, b, s in zip(list_filter_size[1:-1], list_block_size[1:-1], subsample[1:-1]):
+        self.li_conv_block = []
         for i, f, b, s in zip(list_input_size[:-1], list_output_size[:-1], list_block_size[:-1], subsample[:-1]):
-            x = convolutional_block(x, block_idx, i, f, b, s, dev)
+            #x = convolutional_block(x, block_idx, i, f, b, s, dev)
+            self.li_conv_block.append(convolutional_block(x, block_idx, i, f, b, s, dev))
             block_idx += 1
             current_h, current_w = current_h / s[0], current_w / s[1]
-
+        self.li_atrous_block = []
         # Atrous blocks
         for idx, (i, f, b) in enumerate(zip(list_input_size_atrous, list_output_size_atrous, list_block_size_atrous)):
-            x = atrous_block(x, block_idx, i, f, b, dev)
+            self.li_atrous_block.append(atrous_block(x, block_idx, i, f, b, dev))
             block_idx += 1
 
         # Block 7
         i, f, b, s = list_input_size[-1], list_output_size[-1], list_block_size[-1], subsample[-1]
-        x = convolutional_block(x, block_idx, i, f, b, s, dev)
+        #x = convolutional_block(x, block_idx, i, f, b, s, dev)
+        self.conv_block_1  = convolutional_block(x, block_idx, i, f, b, s, dev)
         block_idx += 1
         current_h, current_w = current_h / s[0], current_w / s[1]
 
@@ -101,10 +217,12 @@ class Net(nn.Module):
         #                     subsample=(2, 2),
         #                     border_mode="valid")(x)
         #x = UpSampling2D(size=(2, 2), name="upsampling2d")(x)
-        x = nn.UpsamplingBilinear2d(scale_factor=2).to(dev)(x)
+        #x = nn.UpsamplingBilinear2d(scale_factor=2).to(dev)(x)
+        self.upsample = nn.UpsamplingBilinear2d(scale_factor = 2)
         current_h, current_w = current_h * 2, current_w * 2
 
-        x = convolutional_block(x, block_idx, list_output_size[-1], 256, 2, (1, 1), dev)
+        self.conv_block_2 = convolutional_block(x, block_idx, list_output_size[-1], 256, 2, (1, 1))
+        #x = convolutional_block(x, block_idx, list_output_size[-1], 256, 2, (1, 1), dev)
         block_idx += 1
         #current_h, current_w = current_h * 2, current_w * 2
         current_h, current_w = current_h / s[0], current_w / s[1]
@@ -113,7 +231,7 @@ class Net(nn.Module):
         #x = Convolution2D(nb_classes, 1, 1, name="conv2d_final", border_mode="same")(x)
         #print('self.nb_class :', self.nb_class);    exit(0);
         #x = nn.Conv2d(256, self.nb_class, 1)(x)
-        x = nn.Conv2d(256, 1, 1).to(dev)(x)
+        self.conv_1 = nn.Conv2d(256, 1, 1)
 
         #x = K.permute_dimensions(x, [0, 2, 3, 1])  # last dimension in number of filters
         #x = x.permute(0, 2, 3, 1)
@@ -126,14 +244,6 @@ class Net(nn.Module):
         #xc = Variable(torch.zeros((self.batch_size * current_h * current_w, 1)))
         #print(self.batch_size);        print(current_h);        print(current_w);        exit(0)
         #xc = Variable(torch.zeros(int(self.batch_size * current_h * current_w), 1)).to(dev)
-        '''
-        if torch.is_tensor(current_w):
-            current_w = current_w.item()
-        if torch.is_tensor(current_h):
-            current_h = current_h.item()
-        print('type(current_h) :', type(current_h))
-        print('type(current_w) :', type(current_w))
-        '''
         if torch.is_tensor(batch_size) and torch.is_tensor(current_h) and torch.is_tensor(current_w):
             t_0 = int(batch_size.item() * current_h.item() * current_w.item())
         else:
@@ -151,7 +261,7 @@ class Net(nn.Module):
         #x = K.resize_images(x, h / current_h, w / current_w, "tf")
         x = nn.UpsamplingBilinear2d(size=(h, w)).to(dev)(x)
         return x
-
+        '''
     def num_flat_features(self, x):
         size = x.size()[1:]  # all dimensions except the batch dimension
         num_features = 1
@@ -258,39 +368,65 @@ def softmax2D(input, axis=1):
     return soft_max_2d, input_size, trans_size, axis
 
 
-def convolutional_block(x, block_idx, n_input_channel, nb_filter,
-                        nb_conv, subsample, dev):
-    # 1st conv
-    for i in range(nb_conv):
-        #name = "block%s_conv2D_%s" % (block_idx, i);    print(name)
-        if i < nb_conv - 1:
+class Convolutional_Block(nn.Module):
+    def __init__(self, block_idx, n_input_channel, nb_filter,
+                        nb_conv, subsample):
+        super(Convolutional_Block, self).__init__()
+        
+        li_layer = []
+        # 1st conv
+        for i in range(nb_conv):
+            #name = "block%s_conv2D_%s" % (block_idx, i);    print(name)
+            if i < nb_conv - 1:
             # x = Convolution2D(nb_filter, 3, 3, name=name, border_mode="same")(x)
-            x = nn.Conv2d(n_input_channel, nb_filter, 3, padding=1).to(dev)(x)
-        else:
+                li_layer.append(nn.Conv2d(n_input_channel, nb_filter, 3, padding=1))
+            else:
             # x = Convolution2D(nb_filter, 3, 3, name=name, subsample=subsample, border_mode="same")(x)
-            x = nn.Conv2d(n_input_channel, nb_filter, 3, padding=1, stride=subsample).to(dev)(x)
-        n_input_channel = nb_filter
+            # x = nn.Conv2d(n_input_channel, nb_filter, 3, padding=1, stride=subsample).to(dev)(x)
+                li_layer.append(nn.Conv2d(n_input_channel, nb_filter, 3, padding=1, stride=subsample))
+            n_input_channel = nb_filter
         # x = BatchNormalization(mode=2, axis=1)(x)
-        x = nn.BatchNorm2d(nb_filter).to(dev)(x)
+            li_layer.append(nn.BatchNorm2d(nb_filter))
         # x = Activation("relu")(x)
-        x = F.relu(x)
-    return x
+            li_layer.append(nn.ReLU(inplace = True))
+        self.layer_in_a_row = nn.Sequential(*li_layer)
+    
+    #def to(self, *args, **kwargs):
+    #    self = super().to(*args, **kwargs)
+    #    self.layer_in_a_row = self.layer_in_a_row.to(*args, **kwargs)
 
-def atrous_block(x, block_idx, n_input_channel, nb_filter, nb_conv, dev):
+    def forward(self, x):
+        return self.layer_in_a_row(x)
+        #for layer in self.li_layer:
+        #    x = layer(x)
+        #return x      
+    #return nn.Sequential(*li_layer)
 
-    # 1st conv
-    for i in range(nb_conv):
+class Atrous_Block(nn.Module):
+    def __init__(self, block_idx, n_input_channel, nb_filter, nb_conv):
+        #super().__init__()
+        super(Atrous_Block, self).__init__()
+        li_layer = []
+        # 1st conv
+        for i in range(nb_conv):
         #name = "block%s_conv2D_%s" % (block_idx, i);   print(name)
         #x = AtrousConvolution2D(nb_filter, 3, 3, name=name, border_mode="same")(x)
         #x = nn.Conv2d(n_input_channel, nb_filter, 3, dilation=?)(x)
-        x = nn.Conv2d(n_input_channel, nb_filter, 3, padding=1).to(dev)(x)
+            li_layer.append(nn.Conv2d(n_input_channel, nb_filter, 3, padding=1))
 
         #x = BatchNormalization(mode=2, axis=1)(x)
-        x = nn.BatchNorm2d(nb_filter).to(dev)(x)
+            li_layer.append(nn.BatchNorm2d(nb_filter))
         #x = Activation("relu")(x)
-        x = F.relu(x)
-        n_input_channel = nb_filter
-    return x
+            li_layer.append(nn.ReLU(inplace = True))
+            n_input_channel = nb_filter
+        self.layer_in_a_row = nn.Sequential(*li_layer)
+    
+    def forward(self, x):
+        return self.layer_in_a_row(x)
+        #for layer in self.li_layer:
+        #    x = layer(x)
+        #return x      
+        
 
 def ToTensor2(pic):
     """Converts a PIL.Image or numpy.ndarray (H x W x C) in the range
@@ -516,7 +652,8 @@ def initialize(dev, dir_data, size_img, #di_set_transform,
 
     #net = Net().cuda()
     #net = Net(n_class, n_img_per_batch)
-    net = Net(n_img_per_batch)
+    #net = Net(n_img_per_batch)
+    net = Network((64, 64))
     #t1 = net.cuda()
     #criterion = nn.CrossEntropyLoss()
     criterion = nn.MSELoss()
@@ -524,8 +661,16 @@ def initialize(dev, dir_data, size_img, #di_set_transform,
     #if is_gpu:
     #    net.cuda()
     #    criterion.cuda()
+    #print(net.li_conv_block[0].layer_in_a_row[0].weight.type())
+    #print(net)
+    #print(net.conv_block_series[0].layer_in_a_row[0].weight.type());  #exit(0);
     net = net.to(dev);  criterion.to(dev);
-    optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+    #print(net);  exit(0);
+    #print(net.conv_block_series[0].layer_in_a_row[0].weight.type());  exit(0);
+
+    #optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+    #optimizer = optim.SGD(net.parameters(), lr=0.01, momentum=0.9)
+    optimizer = optim.Adam(net.parameters())
     scheduler = ReduceLROnPlateau(optimizer, 'min', verbose=1, patience = 8, epsilon=0.00001, min_lr=0.000001) # set up scheduler
 
     return trainloader, testloader, net, criterion, optimizer, scheduler, li_idx_sample, li_fn_sample
@@ -535,8 +680,8 @@ def initialize(dev, dir_data, size_img, #di_set_transform,
 def validate_epoch(net, n_loss_rising, loss_avg_pre, ax,
                    li_n_img_val, li_loss_avg_val,
                    testloader, criterion, th_n_loss_rising,
-                   kolor, n_img_train, sec, is_gpu, idx_eopch, 
-                   li_idx_sample, li_fn_sample):
+                   kolor, n_img_train, sec, idx_eopch, 
+                   li_idx_sample, li_fn_sample, dev):
     #print('idx_eopch :', idx_eopch);    exit(0);
     net.eval()
     shall_stop = False
@@ -548,8 +693,9 @@ def validate_epoch(net, n_loss_rising, loss_avg_pre, ax,
         for i, data in enumerate(testloader):
             inputs, labels = data
             n_img_4_batch = labels.size()[0]
-            if is_gpu:
-                inputs, labels = inputs.cuda(), labels.cuda()
+            #if is_gpu:
+            #    inputs, labels = inputs.cuda(), labels.cuda()
+            inputs = inputs.to(dev);    labels = labels.to(dev)
             inputs, labels = Variable(inputs), Variable(labels)
             #images, labels = images.cuda(), labels.cuda()
             outputs = net(inputs)
@@ -584,6 +730,7 @@ def validate_epoch(net, n_loss_rising, loss_avg_pre, ax,
             shall_stop = True
     else:
         n_loss_rising = max(0, n_loss_rising - 1)
+    print('n_loss_rising :', n_loss_rising)
     li_n_img_val.append(n_img_train)
     li_loss_avg_val.append(loss_avg)
     ax.plot(li_n_img_val, li_loss_avg_val, c=kolor)
@@ -629,7 +776,7 @@ def train_epoch(
         graph = hl.build_graph(net, torch.zeros([1, 1, 64, 64]).to(dev));    graph.them = hl.graph.THEMES['blue'].copy();    
         graph.save('colorization_hiddenlayer', format='png')
         '''
-        make_dot(outputs, params = dict(list(net.named_parameters()) + [('inputs', inputs)])).render('colorization_torchviz', format='png');    exit(0)
+        #make_dot(outputs, params = dict(list(net.named_parameters()) + [('inputs', inputs)])).render('colorization_torchviz', format='png');    exit(0)
         #print(inputs.size());   print(labels.size());   print(outputs.size());  exit(0);
         # labels += 10
         loss = criterion(outputs, labels)
@@ -652,7 +799,6 @@ def train_epoch(
         #if n_image_total % interval_train_loss == interval_train_loss - 1:  # print every 2000 mini-batches
         #if n_image_total % interval_train_loss == 0:  # print every 2000 mini-batches
         if n_img_total > n_img_milestone:  # print every 2000 mini-batches
-
             # if i % 2000 == 1999:    # print every 2000 mini-batches
             running_loss_avg = running_loss / n_img_interval
             li_n_img.append(n_img_total)
@@ -720,7 +866,8 @@ def train(dev, trainloader, testloader, net, criterion, optimizer, scheduler, #l
     sec = 0.01
     is_lr_just_decayed = False
     n_image_total, n_img_interval, running_loss = 0, 0, 0.0
-    n_loss_rising, th_n_loss_rising, loss_avg_pre = 0, 3, 100000000000
+    n_loss_rising, loss_avg_pre = 0, 100000000000
+    th_n_loss_rising  = 100
     di_ax_color = {'time' : np.random.rand(3), 'train' : np.random.rand(3),
                    'val' : np.random.rand(3)}
     ax_time, ax_loss, li_n_img_train, li_n_img_val, \
@@ -735,13 +882,14 @@ def train(dev, trainloader, testloader, net, criterion, optimizer, scheduler, #l
             n_img_interval, n_img_milestone, running_loss, is_lr_just_decayed,
             li_n_img_train, li_loss_avg_train, ax_loss, sec, epoch,
             di_ax_color['train'], interval_train_loss, dev)#, loss_l2)
+        print('li_loss_avg_train :', li_loss_avg_train);
         shall_stop_val, net, n_loss_rising, loss_avg_pre, ax_loss_val, \
         li_n_img_val, li_loss_avg_val, lap_val, n_img_val = \
             validate_epoch(
                 net, n_loss_rising, loss_avg_pre, ax_loss,
                 li_n_img_val, li_loss_avg_val,
                 testloader, criterion, th_n_loss_rising, di_ax_color['val'],
-                n_image_total, sec, is_gpu, epoch, li_idx_sample, li_fn_sample)
+                n_image_total, sec, epoch, li_idx_sample, li_fn_sample, dev)
         #lap_train = time() - start_train
         n_batch_val = n_img_val / n_img_per_batch
         lap_batch = lap_val / n_batch_val
@@ -790,7 +938,8 @@ def main():
     #size_img = 256
     size_img = 64
     n_class = 300
-    interval_train_loss = int(round(20000 / n_img_per_batch)) * n_img_per_batch
+    #interval_train_loss = int(round(20000 / n_img_per_batch)) * n_img_per_batch
+    interval_train_loss = 4000
     li_idx_sample_ratio = [0.2, 0.4, 0.6, 0.8]
 
     '''
